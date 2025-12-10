@@ -1,0 +1,6 @@
+# requirements.txt
+torch>=1.9.0
+numpy>=1.19.0
+matplotlib>=3.3.0
+tqdm>=4.61.0
+pygame>=2.0.0  # 仅用于GUI，训练不需要

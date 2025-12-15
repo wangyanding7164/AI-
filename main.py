@@ -146,36 +146,72 @@ class GomokuGame:
 class AIManager:
     """AI管理器，负责加载和使用不同的AI模型"""
 
-    def __init__(self, board_size=9):
+    def __init__(self, board_size=9, debug=False):
         self.board_size = board_size
         self.ai_models = {}
         self.current_ai = None
+        self.debug = debug
         self.load_all_models()
 
     def load_all_models(self):
-        """加载所有可用的AI模型"""
-        try:
-            # 加载规则AI
-            self.ai_models['rule_based'] = RuleBasedAI(player=2, board_size=self.board_size)
-            print("✅ 规则AI加载成功")
-        except Exception as e:
-            print(f"❌ 规则AI加载失败: {e}")
-            # 创建备用规则AI
-            self.ai_models['rule_based'] = BaseAI(player=2, name="FallbackRuleAI")
+        """加载所有可用的AI模型 - 添加详细调试"""
+        print(f"\n{'=' * 60}")
+        print("AI加载调试信息")
+        print(f"{'=' * 60}")
 
         try:
-            # 尝试加载DQN模型
-            dqn_model_path = self.find_latest_model()
-            if dqn_model_path:
-                self.ai_models['dqn'] = self.load_dqn_model(dqn_model_path)
-                print(f"✅ DQN AI加载成功: {dqn_model_path}")
-                self.current_ai = 'dqn'  # 默认使用DQN
+            # 1. 检查模块内容
+            import models.rule_based_ai
+            print(f"1. AI模块文件: {models.rule_based_ai.__file__}")
+            print(f"2. 模块中的类: {[name for name in dir(models.rule_based_ai) if 'AI' in name]}")
+
+            # 2. 检查RuleBasedAI类的属性
+            if hasattr(models.rule_based_ai, 'RuleBasedAI'):
+                ai_class = models.rule_based_ai.RuleBasedAI
+                print(f"3. RuleBasedAI类存在")
+                print(f"4. 类的方法: {[m for m in dir(ai_class) if not m.startswith('_')]}")
+
+                # 3. 尝试创建实例
+                try:
+                    ai_instance = ai_class(
+                        player=2,
+                        board_size=self.board_size,
+                        debug=self.debug,
+                    )
+                    print(f"5. AI实例创建成功: {ai_instance}")
+                    print(f"6. AI名称: {getattr(ai_instance, 'name', '无name属性')}")
+                    self.ai_models['rule_based'] = ai_instance
+                    print("✅ 规则AI加载成功")
+
+                except TypeError as e:
+                    print(f"❌ 创建AI实例参数错误: {e}")
+                    # 尝试简化版本
+                    try:
+                        ai_instance = ai_class(player=2, board_size=self.board_size)
+                        self.ai_models['rule_based'] = ai_instance
+                        print("✅ 使用简化参数创建成功")
+                    except Exception as e2:
+                        print(f"❌ 简化参数也失败: {e2}")
+                        self._create_fallback_ai()
+
+                except Exception as e:
+                    print(f"❌ 创建AI实例失败: {e}")
+                    self._create_fallback_ai()
+
             else:
-                print("⚠️ 未找到DQN模型，使用规则AI")
-                self.current_ai = 'rule_based'
+                print("❌ RuleBasedAI类不存在")
+                self._create_fallback_ai()
+
         except Exception as e:
-            print(f"❌ DQN AI加载失败: {e}")
-            self.current_ai = 'rule_based'
+            print(f"❌ 导入AI模块失败: {e}")
+            self._create_fallback_ai()
+
+        print(f"{'=' * 60}\n")
+
+    def _create_fallback_ai(self):
+        """创建备用AI"""
+        print("创建备用AI...")
+        self.ai_models['rule_based'] = BaseAI(player=2, name="FallbackAI")
 
     def find_latest_model(self):
         """查找最新的模型文件"""
@@ -198,7 +234,7 @@ class AIManager:
         return None
 
     def load_dqn_model(self, model_path):
-        """加载DQN模型[6,8](@ref)"""
+        """加载DQN模型"""
         # 创建DQN智能体
         agent = DQNAgent(
             board_size=self.board_size,
@@ -207,13 +243,13 @@ class AIManager:
             epsilon=0.01  # 推理时使用很小的探索率
         )
 
-        # 加载模型权重[6](@ref)
+        # 加载模型权重
         if torch.cuda.is_available():
             checkpoint = torch.load(model_path)
         else:
             checkpoint = torch.load(model_path, map_location='cpu')
 
-        # 加载模型状态[8](@ref)
+        # 加载模型状态
         if 'policy_net_state_dict' in checkpoint:
             agent.policy_net.load_state_dict(checkpoint['policy_net_state_dict'])
             agent.target_net.load_state_dict(checkpoint['target_net_state_dict'])
@@ -233,30 +269,71 @@ class AIManager:
             print(f"未知的AI类型: {ai_type}")
 
     def get_move(self, game_state, valid_moves, current_player):
-        """获取AI的移动"""
+        """获取AI的移动 - 超级调试版"""
         if self.current_ai not in self.ai_models:
-            # 回退到随机
             valid_indices = np.where(valid_moves == 1)[0]
             return np.random.choice(valid_indices) if len(valid_indices) > 0 else None
 
         ai = self.ai_models[self.current_ai]
-        ai.player = current_player  # 设置当前玩家
-        return ai.get_move(game_state, valid_moves)
+        ai.player = current_player
+
+        # 强制开启调试
+        ai.debug = True
+
+        print(f"\n{'=' * 60}")
+        print(f"AI决策开始 - 玩家{current_player}")
+        print(f"AI类型: {self.current_ai}")
+
+        # 显示人类棋子的位置
+        human_positions = []
+        for y in range(self.board_size):
+            for x in range(self.board_size):
+                if game_state[y][x] == 1:  # 人类是黑棋
+                    human_positions.append((x, y))
+
+        print(f"人类棋子位置: {human_positions}")
+
+        # 检查是否有连续棋子
+        for x, y in human_positions:
+            for dx, dy in [(1, 0), (0, 1), (1, 1), (1, -1)]:
+                count = 1
+                for i in range(1, 5):
+                    nx, ny = x + dx * i, y + dy * i
+                    if 0 <= nx < self.board_size and 0 <= ny < self.board_size and game_state[ny][nx] == 1:
+                        count += 1
+                    else:
+                        break
+                if count >= 2:
+                    print(f"发现人类连续棋子: ({x},{y})方向({dx},{dy}) 长度{count}")
+
+        action = ai.get_move(game_state, valid_moves)
+
+        if action is not None:
+            x, y = action % self.board_size, action // self.board_size
+            print(f"AI最终选择: ({x}, {y})")
+        else:
+            print("AI返回了None!")
+
+        print(f"{'=' * 60}\n")
+        return action
 
 
 class GomokuGUI:
     """五子棋人机对弈界面 - 集成训练好的AI"""
 
-    def __init__(self, board_size=9):
+    def __init__(self, board_size=9, debug=False):
         self.game = GomokuGame(board_size)
         self.board_size = board_size
         self.cell_size = 60
         self.margin = 50
         self.width = self.cell_size * board_size + 2 * self.margin
-        self.height = self.cell_size * board_size + 2 * self.margin + 150
+        self.height = self.cell_size * board_size + 2 * self.margin + 200  # 增加高度以容纳更多按钮
+
+        # 调试模式
+        self.debug = debug
 
         # 初始化AI管理器
-        self.ai_manager = AIManager(board_size)
+        self.ai_manager = AIManager(board_size, debug=debug)
 
         # 颜色
         self.BLACK = (0, 0, 0)
@@ -267,19 +344,24 @@ class GomokuGUI:
         self.RED = (255, 0, 0)
         self.BLUE = (0, 120, 255)
         self.YELLOW = (255, 200, 0)
+        self.ORANGE = (255, 165, 0)
+        self.PURPLE = (128, 0, 128)
 
         pygame.init()
         self.screen = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption("Gomoku AI Game - 训练模型集成版")
+        pygame.display.set_caption("Gomoku AI Game - 增强版")
 
         # 字体
         self.font = self.get_chinese_font(24)
         self.large_font = self.get_chinese_font(36)
         self.small_font = self.get_chinese_font(18)
+        self.tiny_font = self.get_chinese_font(14)
 
-        # AI选择界面状态
-        self.showing_ai_selection = False
-        self.ai_buttons = []
+        # 游戏状态
+        self.showing_menu = True
+        self.game_started = False
+        self.human_is_black = True
+        self.selected_ai = 'rule_based'
 
     def get_chinese_font(self, size):
         """获取支持中文的字体"""
@@ -322,109 +404,130 @@ class GomokuGUI:
                 "AI获胜!": "AI Wins!",
                 "平局!": "Draw!",
                 "当前AI": "Current AI",
-                "切换AI": "Switch AI"
+                "切换AI": "Switch AI",
+                "重新开始": "Restart Game",
+                "返回主菜单": "Back to Menu",
+                "继续游戏": "Continue",
+                "五子棋AI对战": "Gomoku AI Game",
+                "选择您的棋子颜色和AI对手:": "Select your piece color and AI opponent:",
+                "黑棋（先手）": "Black (First)",
+                "白棋（后手）": "White (Second)",
+                "游戏结束": "Game Over"
             }
             english_text = english_mapping.get(text, text)
             return font.render(english_text, True, color)
 
-    def choose_role_and_ai(self):
-        """角色和AI选择界面"""
-        choosing = True
-        human_is_black = True
-        selected_ai = self.ai_manager.current_ai
+    def draw_button(self, rect, text, bg_color, text_color, border_color=None, border_width=2):
+        """绘制按钮"""
+        if border_color:
+            pygame.draw.rect(self.screen, border_color, rect, border_width)
 
-        while choosing:
-            self.screen.fill(self.WHITE)
+        inner_rect = rect.inflate(-4, -4)
+        pygame.draw.rect(self.screen, bg_color, inner_rect)
 
-            # 显示选择提示
-            title_text = self.render_text("选择您的棋子颜色和AI对手:", self.large_font, self.BLACK)
-            self.screen.blit(title_text, (self.width // 2 - title_text.get_width() // 2, 30))
+        text_surface = self.render_text(text, self.font, text_color)
+        text_rect = text_surface.get_rect(center=rect.center)
+        self.screen.blit(text_surface, text_rect)
 
-            # 棋子颜色选择按钮
-            color_y = 100
-            black_rect = pygame.Rect(self.width // 2 - 250, color_y, 200, 50)
-            white_rect = pygame.Rect(self.width // 2 + 50, color_y, 200, 50)
+        return rect
 
-            pygame.draw.rect(self.screen, self.BROWN, black_rect, 2)
-            pygame.draw.rect(self.screen, self.BROWN, white_rect, 2)
+    def show_main_menu(self):
+        """显示主菜单"""
+        self.screen.fill(self.WHITE)
 
-            if human_is_black:
-                pygame.draw.rect(self.screen, self.YELLOW, black_rect, 3)
-            else:
-                pygame.draw.rect(self.screen, self.YELLOW, white_rect, 3)
+        # 标题
+        title_text = self.render_text("五子棋AI对战", self.large_font, self.BLACK)
+        self.screen.blit(title_text, (self.width // 2 - title_text.get_width() // 2, 30))
 
-            black_text = self.render_text("黑棋（先手）", self.font, self.BLACK)
-            white_text = self.render_text("白棋（后手）", self.font, self.BLACK)
+        # 棋子颜色选择
+        color_y = 100
+        title = self.render_text("选择您的棋子颜色和AI对手:", self.font, self.BLACK)
+        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, color_y))
 
-            self.screen.blit(black_text, (black_rect.centerx - black_text.get_width() // 2,
-                                          black_rect.centery - black_text.get_height() // 2))
-            self.screen.blit(white_text, (white_rect.centerx - white_text.get_width() // 2,
-                                          white_rect.centery - white_text.get_height() // 2))
+        # 棋子颜色选择按钮
+        color_y += 50
+        black_rect = pygame.Rect(self.width // 2 - 250, color_y, 200, 50)
+        white_rect = pygame.Rect(self.width // 2 + 50, color_y, 200, 50)
 
-            # AI选择按钮
-            ai_y = 180
-            ai_title = self.render_text("选择AI对手:", self.font, self.BLACK)
-            self.screen.blit(ai_title, (self.width // 2 - ai_title.get_width() // 2, ai_y))
+        # 绘制颜色选择按钮
+        black_button = self.draw_button(
+            black_rect,
+            "黑棋（先手）",
+            self.BLACK if self.human_is_black else self.WHITE,
+            self.WHITE if self.human_is_black else self.BLACK,
+            self.YELLOW if self.human_is_black else self.BROWN
+        )
 
-            ai_buttons = []
-            ai_types = ['rule_based', 'dqn'] if 'dqn' in self.ai_manager.ai_models else ['rule_based']
-            ai_names = {'rule_based': '规则AI', 'dqn': 'DQN AI'}
+        white_button = self.draw_button(
+            white_rect,
+            "白棋（后手）",
+            self.WHITE if not self.human_is_black else self.BLACK,
+            self.BLACK if not self.human_is_black else self.WHITE,
+            self.YELLOW if not self.human_is_black else self.BROWN
+        )
 
-            for i, ai_type in enumerate(ai_types):
-                ai_rect = pygame.Rect(self.width // 2 - 100 + i * 220, ai_y + 40, 180, 40)
-                ai_buttons.append((ai_rect, ai_type))
+        # AI选择
+        ai_y = color_y + 80
+        ai_title = self.render_text("选择AI对手:", self.font, self.BLACK)
+        self.screen.blit(ai_title, (self.width // 2 - ai_title.get_width() // 2, ai_y))
 
-                # 绘制按钮
-                if selected_ai == ai_type:
-                    pygame.draw.rect(self.screen, self.BLUE, ai_rect)
-                    text_color = self.WHITE
-                else:
-                    pygame.draw.rect(self.screen, self.BROWN, ai_rect, 2)
-                    text_color = self.BLACK
+        ai_y += 50
+        ai_buttons = []
+        ai_types = ['rule_based', 'dqn'] if 'dqn' in self.ai_manager.ai_models else ['rule_based']
+        ai_names = {'rule_based': '规则AI', 'dqn': 'DQN AI'}
 
-                ai_text = self.render_text(ai_names.get(ai_type, ai_type), self.font, text_color)
-                self.screen.blit(ai_text, (ai_rect.centerx - ai_text.get_width() // 2,
-                                           ai_rect.centery - ai_text.get_height() // 2))
+        for i, ai_type in enumerate(ai_types):
+            ai_rect = pygame.Rect(self.width // 2 - 100 + (i - 0.5) * 220, ai_y, 180, 40)
 
-            # 开始游戏按钮
-            start_rect = pygame.Rect(self.width // 2 - 100, ai_y + 120, 200, 50)
-            pygame.draw.rect(self.screen, self.GREEN, start_rect)
-            start_text = self.render_text("开始游戏", self.font, self.WHITE)
-            self.screen.blit(start_text, (start_rect.centerx - start_text.get_width() // 2,
-                                          start_rect.centery - start_text.get_height() // 2))
+            # 高亮选中的AI
+            bg_color = self.BLUE if self.selected_ai == ai_type else self.WHITE
+            text_color = self.WHITE if self.selected_ai == ai_type else self.BLACK
+            border_color = self.YELLOW if self.selected_ai == ai_type else self.BROWN
 
-            # 显示当前选择的AI信息
-            info_y = ai_y + 190
-            info_text = self.render_text(f"当前AI: {ai_names.get(selected_ai, selected_ai)}", self.small_font,
-                                         self.BLACK)
-            self.screen.blit(info_text, (self.width // 2 - info_text.get_width() // 2, info_y))
+            ai_button = self.draw_button(ai_rect, ai_names.get(ai_type, ai_type),
+                                         bg_color, text_color, border_color)
+            ai_buttons.append((ai_button, ai_type))
 
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    sys.exit()
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    pos = pygame.mouse.get_pos()
+        # 开始游戏按钮
+        start_y = ai_y + 60
+        start_rect = pygame.Rect(self.width // 2 - 100, start_y, 200, 50)
+        start_button = self.draw_button(start_rect, "开始游戏", self.GREEN, self.WHITE)
 
-                    # 检查棋子颜色选择
-                    if black_rect.collidepoint(pos):
-                        human_is_black = True
-                    elif white_rect.collidepoint(pos):
-                        human_is_black = False
+        # 显示当前选择
+        info_y = start_y + 70
+        info_text = self.render_text(f"当前选择: {ai_names.get(self.selected_ai, self.selected_ai)}",
+                                     self.small_font, self.BLACK)
+        self.screen.blit(info_text, (self.width // 2 - info_text.get_width() // 2, info_y))
 
-                    # 检查AI选择
-                    for rect, ai_type in ai_buttons:
-                        if rect.collidepoint(pos):
-                            selected_ai = ai_type
+        # 事件处理
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                pos = pygame.mouse.get_pos()
 
-                    # 开始游戏
-                    if start_rect.collidepoint(pos):
-                        self.game.set_players(human_is_black)
-                        self.ai_manager.set_ai(selected_ai)
-                        choosing = False
-                        print(f"游戏开始！人类执{'黑' if human_is_black else '白'}棋，AI对手: {selected_ai}")
+                # 检查棋子颜色选择
+                if black_button.collidepoint(pos):
+                    self.human_is_black = True
+                elif white_button.collidepoint(pos):
+                    self.human_is_black = False
 
-            pygame.display.flip()
+                # 检查AI选择
+                for button_rect, ai_type in ai_buttons:
+                    if button_rect.collidepoint(pos):
+                        self.selected_ai = ai_type
+
+                # 开始游戏
+                if start_button.collidepoint(pos):
+                    self.game.set_players(self.human_is_black)
+                    self.ai_manager.set_ai(self.selected_ai)
+                    self.showing_menu = False
+                    self.game_started = True
+                    print(f"游戏开始！人类执{'黑' if self.human_is_black else '白'}棋，AI对手: {self.selected_ai}")
+
+        pygame.display.flip()
+        return True
 
     def draw_board(self):
         """绘制棋盘和游戏信息"""
@@ -448,6 +551,16 @@ class GomokuGUI:
             x = self.margin + i * self.cell_size
             pygame.draw.line(self.screen, self.BLACK, (x, start_y), (x, end_y), 2)
 
+        # 绘制坐标（调试模式）
+        if self.debug:
+            for y in range(self.board_size):
+                for x in range(self.board_size):
+                    center_x = self.margin + x * self.cell_size
+                    center_y = self.margin + y * self.cell_size
+                    coord_text = f"{x},{y}"
+                    coord_surface = self.tiny_font.render(coord_text, True, (100, 100, 100))
+                    self.screen.blit(coord_surface, (center_x - 12, center_y - 8))
+
         # 绘制棋子
         for y in range(self.board_size):
             for x in range(self.board_size):
@@ -469,35 +582,47 @@ class GomokuGUI:
         self.screen.blit(status_text, (self.margin, info_y))
 
         # AI信息
-        ai_info = self.render_text(f"AI: {self.ai_manager.current_ai}", self.small_font, self.BLUE)
+        ai_names = {'rule_based': '规则AI', 'dqn': 'DQN AI'}
+        current_ai_name = ai_names.get(self.ai_manager.current_ai, self.ai_manager.current_ai)
+        ai_info = self.render_text(f"AI: {current_ai_name}", self.small_font, self.BLUE)
         self.screen.blit(ai_info, (self.width - self.margin - ai_info.get_width(), info_y))
 
         # 游戏结果
         if self.game.done:
             result_y = info_y + 30
             if self.game.winner == 0:
-                result_text = self.render_text("平局!", self.large_font, self.RED)
+                result_text = self.render_text("平局!", self.large_font, self.ORANGE)
             else:
                 winner = "人类" if self.game.winner == self.game.human_player else "AI"
                 result_text = self.render_text(f"{winner}获胜!", self.large_font, self.RED)
             self.screen.blit(result_text, (self.width // 2 - result_text.get_width() // 2, result_y))
 
-            # 重新开始按钮
-            restart_y = result_y + 50
-            restart_rect = pygame.Rect(self.width // 2 - 80, restart_y, 160, 40)
-            pygame.draw.rect(self.screen, self.GREEN, restart_rect)
-            restart_text = self.render_text("重新开始", self.font, self.WHITE)
-            self.screen.blit(restart_text, (restart_rect.centerx - restart_text.get_width() // 2,
-                                            restart_rect.centery - restart_text.get_height() // 2))
+            # 按钮区域
+            button_y = result_y + 50
+            button_width = 120
+            button_height = 40
+            button_spacing = 20
 
-        # 切换AI按钮（游戏未结束时）
-        if not self.game.done:
+            # 重新开始按钮
+            restart_x = self.width // 2 - button_width - button_spacing // 2
+            restart_rect = pygame.Rect(restart_x, button_y, button_width, button_height)
+
+            # 返回主菜单按钮
+            menu_x = self.width // 2 + button_spacing // 2
+            menu_rect = pygame.Rect(menu_x, button_y, button_width, button_height)
+
+            # 绘制按钮
+            restart_button = self.draw_button(restart_rect, "重新开始", self.GREEN, self.WHITE)
+            menu_button = self.draw_button(menu_rect, "返回主菜单", self.PURPLE, self.WHITE)
+
+            return restart_button, menu_button
+        else:
+            # 游戏进行中，显示切换AI按钮
             switch_y = info_y + 30
             switch_rect = pygame.Rect(self.width - 120, switch_y, 100, 30)
-            pygame.draw.rect(self.screen, self.BLUE, switch_rect)
-            switch_text = self.render_text("切换AI", self.small_font, self.WHITE)
-            self.screen.blit(switch_text, (switch_rect.centerx - switch_text.get_width() // 2,
-                                           switch_rect.centery - switch_text.get_height() // 2))
+            switch_button = self.draw_button(switch_rect, "切换AI", self.BLUE, self.WHITE)
+
+            return switch_button, None
 
     def handle_ai_move(self):
         """处理AI的移动"""
@@ -511,71 +636,105 @@ class GomokuGUI:
             # 获取AI移动
             action = self.ai_manager.get_move(state, valid_moves, self.game.current_player)
 
-            if action is not None and self.game.is_valid_move(action):
-                self.game.make_move(action)
-                return True
+            if action is not None:
+                if self.debug:
+                    n = self.board_size
+                    x, y = action % n, action // n
+                    print(f"[UI调试] AI返回action: {action}")
+                    print(f"        转换坐标: (x={x}, y={y})")
+                    print(f"        棋盘状态: board[{y}][{x}] = {state[y][x]}")
+
+                if self.game.is_valid_move(action):
+                    self.game.make_move(action)
+                    return True
+                elif self.debug:
+                    print(f"[UI调试] 移动不合法!")
+
         return False
 
     def run(self):
         """运行游戏主循环"""
-        self.choose_role_and_ai()
         clock = pygame.time.Clock()
-
-        # AI自动移动计时器
-        ai_move_delay = 1000  # 1秒延迟
         last_ai_time = 0
+        ai_move_delay = 1000  # 1秒延迟
+
+        # 存储按钮引用
+        current_buttons = (None, None)
 
         running = True
         while running:
             current_time = pygame.time.get_ticks()
-            ai_should_move = (self.game.get_current_player_type() == 'ai' and
-                              not self.game.done and
-                              current_time - last_ai_time > ai_move_delay)
 
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
+            if self.showing_menu:
+                self.show_main_menu()
+            else:
+                # 检查是否需要AI移动
+                ai_should_move = (self.game.get_current_player_type() == 'ai' and
+                                  not self.game.done and
+                                  current_time - last_ai_time > ai_move_delay)
 
-                elif event.type == pygame.MOUSEBUTTONDOWN and not self.game.done:
-                    pos = pygame.mouse.get_pos()
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                        break
 
-                    # 处理人类玩家移动
-                    if self.game.get_current_player_type() == 'human':
-                        board_x = round((pos[0] - self.margin) / self.cell_size)
-                        board_y = round((pos[1] - self.margin) / self.cell_size)
+                    elif event.type == pygame.MOUSEBUTTONDOWN:
+                        pos = pygame.mouse.get_pos()
 
-                        if 0 <= board_x < self.board_size and 0 <= board_y < self.board_size:
-                            action = board_y * self.board_size + board_x
-                            if self.game.is_valid_move(action):
-                                self.game.make_move(action)
+                        if not self.game.done:
+                            # 处理人类玩家移动
+                            if self.game.get_current_player_type() == 'human':
+                                # 计算棋盘坐标
+                                board_x = round((pos[0] - self.margin) / self.cell_size)
+                                board_y = round((pos[1] - self.margin) / self.cell_size)
 
-                    # 检查切换AI按钮
-                    switch_rect = pygame.Rect(self.width - 120, self.margin + self.cell_size * self.board_size + 50,
-                                              100, 30)
-                    if switch_rect.collidepoint(pos):
-                        # 切换AI类型
-                        current_ai = self.ai_manager.current_ai
-                        if current_ai == 'rule_based' and 'dqn' in self.ai_manager.ai_models:
-                            self.ai_manager.set_ai('dqn')
-                        else:
-                            self.ai_manager.set_ai('rule_based')
-                        print(f"已切换到{self.ai_manager.current_ai}")
+                                if self.debug:
+                                    print(f"[UI调试] 鼠标点击: 屏幕({pos[0]},{pos[1]}) -> 棋盘({board_x},{board_y})")
 
-                elif event.type == pygame.MOUSEBUTTONDOWN and self.game.done:
-                    # 检查重新开始按钮
-                    restart_rect = pygame.Rect(self.width // 2 - 80,
-                                               self.margin + self.cell_size * self.board_size + 100,
-                                               160, 40)
-                    if restart_rect.collidepoint(pos):
-                        self.game.reset()
-                        self.choose_role_and_ai()
+                                if 0 <= board_x < self.board_size and 0 <= board_y < self.board_size:
+                                    # 注意：这里使用 board_y * n + board_x
+                                    # 因为 board_y 是行，board_x 是列
+                                    action = board_y * self.board_size + board_x
+                                    if self.game.is_valid_move(action):
+                                        if self.debug:
+                                            x, y = action % self.board_size, action // self.board_size
+                                            print(f"[UI调试] 人类落子: action={action}, 坐标(x={x}, y={y})")
+                                        self.game.make_move(action)
 
-            # 处理AI移动
-            if ai_should_move:
-                if self.handle_ai_move():
-                    last_ai_time = current_time
+                            # 检查切换AI按钮
+                            switch_button, _ = current_buttons
+                            if switch_button and switch_button.collidepoint(pos):
+                                # 切换AI类型
+                                current_ai = self.ai_manager.current_ai
+                                if current_ai == 'rule_based' and 'dqn' in self.ai_manager.ai_models:
+                                    self.ai_manager.set_ai('dqn')
+                                else:
+                                    self.ai_manager.set_ai('rule_based')
+                                print(f"已切换到{self.ai_manager.current_ai}")
 
-            self.draw_board()
+                        elif self.game.done:
+                            # 游戏结束，检查按钮
+                            restart_button, menu_button = current_buttons
+                            if restart_button and restart_button.collidepoint(pos):
+                                # 重新开始游戏
+                                self.game.reset()
+                                self.game.set_players(self.human_is_black)
+                                print(f"重新开始游戏")
+
+                            elif menu_button and menu_button.collidepoint(pos):
+                                # 返回主菜单
+                                self.showing_menu = True
+                                self.game_started = False
+                                print(f"返回主菜单")
+
+                # 处理AI移动
+                if ai_should_move:
+                    if self.handle_ai_move():
+                        last_ai_time = current_time
+
+                # 绘制棋盘和获取按钮
+                current_buttons = self.draw_board()
+
             pygame.display.flip()
             clock.tick(30)
 
@@ -584,7 +743,8 @@ class GomokuGUI:
 
 if __name__ == "__main__":
     try:
-        gui = GomokuGUI(board_size=9)
+        # 开启调试模式以查看坐标转换
+        gui = GomokuGUI(board_size=9, debug=True)
         gui.run()
     except Exception as e:
         print(f"错误: {e}")

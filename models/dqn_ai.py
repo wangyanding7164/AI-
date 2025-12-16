@@ -141,77 +141,102 @@ class DQNAgent(BaseAI):
         self.memory.append((state, action, reward, next_state, done, valid_moves, player))
 
     def replay(self):
-        """经验回放训练"""
+        """修复版经验回放"""
         if len(self.memory) < self.batch_size:
             return 0
 
         batch = random.sample(self.memory, self.batch_size)
-        states, actions, rewards, next_states, dones, valid_moves_list, players = zip(*batch)
 
-        # 转换为张量
-        state_tensors = []
-        for state, player in zip(states, players):
-            state_tensor = self.policy_net.preprocess_state(state, player)
-            state_tensors.append(state_tensor)
+        # 过滤掉无效的样本
+        valid_batch = []
+        for sample in batch:
+            state, action, reward, next_state, done, valid_moves, player = sample
+            # 确保所有必要的元素都存在
+            if state is not None and action is not None and next_state is not None:
+                valid_batch.append(sample)
 
-        states_tensor = torch.cat(state_tensors).to(self.device)
-        actions = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        rewards = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        dones = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
+        if len(valid_batch) < 32:  # 如果有效样本太少，跳过本次训练
+            return 0
 
-        # 当前Q值
-        current_q = self.policy_net(states_tensor).gather(1, actions)
+        # 使用有效样本
+        states, actions, rewards, next_states, dones, valid_moves_list, players = zip(*valid_batch)
+        actual_batch_size = len(valid_batch)
 
-        # 计算目标Q值
-        with torch.no_grad():
-            next_state_tensors = []
-            for next_state, player in zip(next_states, players):
-                if next_state is not None:
+        try:
+            # 预处理状态
+            state_tensors = []
+            for state, player in zip(states, players):
+                state_tensor = self.policy_net.preprocess_state(state, player)
+                state_tensors.append(state_tensor)
+
+            states_tensor = torch.cat(state_tensors).to(self.device)
+            actions = torch.LongTensor(actions).unsqueeze(1).to(self.device)
+            rewards = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
+            dones = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
+
+            # 当前Q值
+            current_q = self.policy_net(states_tensor).gather(1, actions)
+
+            # 计算目标Q值
+            with torch.no_grad():
+                next_state_tensors = []
+                for next_state, player in zip(next_states, players):
                     next_state_tensor = self.policy_net.preprocess_state(next_state, player)
                     next_state_tensors.append(next_state_tensor)
 
-            if next_state_tensors:
                 next_states_tensor = torch.cat(next_state_tensors).to(self.device)
                 next_q_values = self.target_net(next_states_tensor)
 
                 # 应用有效动作掩码
                 for i, valid_moves in enumerate(valid_moves_list):
                     for j in range(self.action_size):
-                        if valid_moves[j] == 0:
+                        if j < len(valid_moves) and valid_moves[j] == 0:
                             next_q_values[i, j] = -float('inf')
 
                 next_max_q = next_q_values.max(1)[0].unsqueeze(1)
-            else:
-                next_max_q = torch.zeros_like(current_q)
 
-            # 计算目标Q值
-            target_q = rewards + self.gamma * next_max_q * (1 - dones)
+                # 确保张量维度匹配
+                if next_max_q.size(0) != rewards.size(0):
+                    # 如果维度不匹配，调整到最小尺寸
+                    min_size = min(next_max_q.size(0), rewards.size(0))
+                    next_max_q = next_max_q[:min_size]
+                    rewards = rewards[:min_size]
+                    dones = dones[:min_size]
 
-        # 计算损失
-        loss = F.smooth_l1_loss(current_q, target_q)
-        self.losses.append(loss.item())
+                # 计算目标Q值
+                target_q = rewards + self.gamma * next_max_q * (1 - dones)
 
-        # 优化
-        self.optimizer.zero_grad()
-        loss.backward()
+            # 计算损失
+            loss = F.smooth_l1_loss(current_q, target_q)
+            self.losses.append(loss.item())
 
-        # 梯度裁剪
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+            # 优化
+            self.optimizer.zero_grad()
+            loss.backward()
 
-        self.optimizer.step()
-        self.scheduler.step()
+            # 梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
 
-        # 衰减探索率
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
+            self.optimizer.step()
+            self.scheduler.step()
 
-        self.steps_done += 1
+            # 衰减探索率
+            if self.epsilon > self.epsilon_min:
+                self.epsilon *= self.epsilon_decay
 
-        # 更新目标网络
-        if self.steps_done % self.target_update == 0:
-            self.target_net.load_state_dict(self.policy_net.state_dict())
+            self.steps_done += 1
 
-        return loss.item()
+            # 更新目标网络
+            if self.steps_done % self.target_update == 0:
+                self.target_net.load_state_dict(self.policy_net.state_dict())
+
+            return loss.item()
+
+        except Exception as e:
+            print(f"⚠️ 经验回放出错: {e}")
+            # 清空有问题的记忆
+            self.memory.clear()
+            return 0
 
     def get_valid_moves_mask(self, state, player):
         """获取合法动作掩码"""
